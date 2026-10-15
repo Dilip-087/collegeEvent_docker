@@ -40,32 +40,46 @@ pipeline {
                 }
             }
         }
-        stage('Deploy and Auto Rollback') {
+       stage('Deploy and Auto Rollback') {
             steps {
                 script {
                     def deployImage = params.SIMULATE_FAILURE ? 'dilip087/college-event:broken-demo' : env.IMAGE
-                    powershell """
-                        \$env:KUBECONFIG='${env.KUBECONFIG_PATH}'
-                        Write-Host 'Applying Kubernetes manifests...'
-                        & '${env.KUBECTL_BIN}' apply -f k8s/deployment.yaml
-                        & '${env.KUBECTL_BIN}' apply -f k8s/service.yaml
-                        Write-Host 'Updating deployment image...'
-                        & '${env.KUBECTL_BIN}' set image deployment/event-portal-deployment event-portal=${deployImage}
-                        
-                        try {
-                            & '${env.KUBECTL_BIN}' rollout status deployment/event-portal-deployment --timeout=90s
-                            Write-Host 'EVENT PORTAL DEPLOYMENT SUCCESSFUL'
-                        } catch {
-                            Write-Host 'FAILED ROLLOUT DETECTED. Rolling back...'
-                            & '${env.KUBECTL_BIN}' rollout undo deployment/event-portal-deployment
-                            & '${env.KUBECTL_BIN}' rollout status deployment/event-portal-deployment --timeout=120s
-                            throw 'Rollback completed successfully after failed deployment.'
+                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
+                        def result = bat(
+                            returnStatus: true,
+                            script: """
+                                @echo off
+                                set KUBECONFIG=%KUBECONFIG_FILE%
+                                echo Deploying Event Portal image...
+                                "${env.KUBECTL_BIN}" set image deployment/event-portal-deployment event-portal=${deployImage}
+                                if errorlevel 1 exit /b 1
+                                
+                                echo Checking rollout status...
+                                "${env.KUBECTL_BIN}" rollout status deployment/event-portal-deployment --timeout=120s
+                                if errorlevel 1 (
+                                    echo FAILED ROLLOUT DETECTED! Rolling back to previous stable version...
+                                    "${env.KUBECTL_BIN}" rollout undo deployment/event-portal-deployment
+                                    if errorlevel 1 exit /b 1
+                                    
+                                    "${env.KUBECTL_BIN}" rollout status deployment/event-portal-deployment --timeout=120s
+                                    if errorlevel 1 exit /b 1
+                                    
+                                    echo ROLLBACK SUCCESSFUL
+                                    exit /b 1
+                                )
+                                echo EVENT PORTAL DEPLOYMENT SUCCESSFUL
+                            """
+                        )
+                        if (result != 0 && !params.SIMULATE_FAILURE) {
+                            error('Event Portal deployment failed.')
                         }
-                    """
+                        if (result != 0) {
+                            echo 'Simulated failure detected and successfully rolled back.'
+                        }
+                    }
                 }
             }
         }
-    }
     post {
         always { 
             echo 'Pipeline finished. Check stage logs for the result.' 
