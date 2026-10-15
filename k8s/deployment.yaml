@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-portal-deployment
+  labels:
+    app: event-portal
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: event-portal
+  template:
+    metadata:
+      labels:
+        app: event-portal
+    spec:
+      containers:
+      - name: event-portal
+        image: dilip087/college-event-portal:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
