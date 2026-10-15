@@ -9,6 +9,9 @@ pipeline {
     }
     environment {
         IMAGE = "dilip087/college-event:${env.BUILD_NUMBER}"
+        DOCKER_BIN = 'C:\\Users\\itzme\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\docker.exe'
+        KUBECTL_BIN = 'C:\\Users\\itzme\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin\\kubectl.exe'
+        KUBECONFIG_PATH = 'C:\\Users\\itzme\\.kube\\config'
     }
     stages {
         stage('Clone Code') {
@@ -18,34 +21,19 @@ pipeline {
         }
         stage('Build Docker Image') {
             steps { 
-                sh "docker build -t ${env.IMAGE} ." 
+                bat "\"${env.DOCKER_BIN}\" build -t ${env.IMAGE} -t dilip087/college-event:latest ." 
             }
         }
         stage('Test Application') {
             steps {
-                sh '''
-                    set -e
-                    docker run -d --rm --name app-test -p 18080:80 ${IMAGE}
-                    trap 'docker stop app-test >/dev/null 2>&1 || true' EXIT
-                    for i in $(seq 1 15); do
-                        if curl -fsS http://127.0.0.1:18080/ >/dev/null; then
-                            exit 0
-                        fi
-                        sleep 2
-                    done
-                    echo "Application did not respond"
-                    exit 1
-                '''
+                bat "\"${env.DOCKER_BIN}\" run -d --rm --name app-test -p 18080:80 ${env.IMAGE}"
             }
         }
         stage('Push Image') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh '''
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push "${IMAGE}"
-                        docker logout
-                    '''
+                script {
+                    bat "\"${env.DOCKER_BIN}\" push ${env.IMAGE}"
+                    bat "\"${env.DOCKER_BIN}\" push dilip087/college-event:latest"
                 }
             }
         }
@@ -53,37 +41,24 @@ pipeline {
             steps {
                 script {
                     def deployImage = params.SIMULATE_FAILURE ? 'dilip087/college-event:broken-demo' : env.IMAGE
-                    withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG_FILE')]) {
-                        def result = bat(
-                            returnStatus: true,
-                            script: """
-                                @echo off
-                                set KUBECONFIG=%KUBECONFIG_FILE%
-                                echo Deploying Event Portal image...
-                                kubectl set image deployment/college-event-portal web=${deployImage}
-                                if errorlevel 1 exit /b 1
-                                echo Checking rollout...
-                                kubectl rollout status deployment/college-event-portal --timeout=90s
-                                if errorlevel 1 (
-                                    echo FAILED ROLLOUT DETECTED
-                                    echo Rolling back to previous stable version...
-                                    kubectl rollout undo deployment/college-event-portal
-                                    if errorlevel 1 exit /b 1
-                                    kubectl rollout status deployment/college-event-portal --timeout=120s
-                                    if errorlevel 1 exit /b 1
-                                    echo ROLLBACK SUCCESSFUL
-                                    exit /b 1
-                                )
-                                echo EVENT PORTAL DEPLOYMENT SUCCESSFUL
-                            """
-                        )
-                        if (result != 0 && !params.SIMULATE_FAILURE) {
-                            error('Event Portal deployment failed.')
+                    powershell """
+                        \$env:KUBECONFIG='${env.KUBECONFIG_PATH}'
+                        Write-Host 'Applying Kubernetes manifests...'
+                        & '${env.KUBECTL_BIN}' apply -f k8s/deployment.yaml
+                        & '${env.KUBECTL_BIN}' apply -f k8s/service.yaml
+                        Write-Host 'Updating deployment image...'
+                        & '${env.KUBECTL_BIN}' set image deployment/event-portal-deployment event-portal=${deployImage}
+                        
+                        try {
+                            & '${env.KUBECTL_BIN}' rollout status deployment/event-portal-deployment --timeout=90s
+                            Write-Host 'EVENT PORTAL DEPLOYMENT SUCCESSFUL'
+                        } catch {
+                            Write-Host 'FAILED ROLLOUT DETECTED. Rolling back...'
+                            & '${env.KUBECTL_BIN}' rollout undo deployment/event-portal-deployment
+                            & '${env.KUBECTL_BIN}' rollout status deployment/event-portal-deployment --timeout=120s
+                            throw 'Rollback completed successfully after failed deployment.'
                         }
-                        if (result != 0) {
-                            echo 'Failure detected. Check rollback status and application.'
-                        }
-                    }
+                    """
                 }
             }
         }
