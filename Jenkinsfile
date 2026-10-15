@@ -24,7 +24,7 @@ pipeline {
                 bat "\"${env.DOCKER_BIN}\" build -t ${env.IMAGE} -t dilip087/college-event:latest ." 
             }
         }
-       stage('Test Application') {
+        stage('Test Application') {
             steps {
                 bat """
                     "${env.DOCKER_BIN}" rm -f app-test >nul 2>&1 || true
@@ -40,7 +40,7 @@ pipeline {
                 }
             }
         }
-       stage('Deploy and Auto Rollback') {
+        stage('Deploy and Auto Rollback') {
             steps {
                 script {
                     def deployImage = params.SIMULATE_FAILURE ? 'dilip087/college-event:broken-demo' : env.IMAGE
@@ -80,6 +80,7 @@ pipeline {
                 }
             }
         }
+    }
     post {
         always { 
             echo 'Pipeline finished. Check stage logs for the result.' 
